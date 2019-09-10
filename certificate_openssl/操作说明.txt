@@ -1,0 +1,63 @@
+地址：  https://jamielinux.com/docs/openssl-certificate-authority/index.html
+
+################################   根证书  ################################
+mkdir certs crl newcerts private csr
+touch index.txt
+echo 1000 > serial	
+echo unique_subject = yes > index.txt.attr
+
+
+openssl genrsa -aes256 -out private/ca.key.pem 4096
+###########################    我们将在创建根证书时应用v3_ca扩展。   ##########################
+###########################    我们将在创建根证书时应用v3_ca_intermediate扩展。   ##########################
+openssl req -config openssl.cnf -key private/ca.key.pem -new -x509 -days 7300 -sha256 -extensions v3_ca -out certs/ca.cert.pem
+
+################### 校验  ###############################
+openssl x509 -noout -text -in certs/ca.cert.pem
+
+################################   中间证书  ################################
+mkdir intermediate
+cd intermediate
+mkdir certs crl newcerts private csr
+touch index.txt
+echo 1000 > serial	
+
+################################  需要在ca路径下操作  ################################
+cd ..    ############# 到ca路径下操作
+openssl genrsa -aes256 -out intermediate/private/intermediate.key.pem 4096
+###########################    细节（国家、地区、组织等）通常应与根CA匹配。 但是Common Name必须不同。  ###########################
+openssl req -config intermediate/openssl.cnf -new -sha256 -key intermediate/private/intermediate.key.pem -out intermediate/csr/intermediate.csr.pem
+openssl ca -config openssl.cnf -extensions v3_intermediate_ca -days 3650 -notext -md sha256 -in intermediate/csr/intermediate.csr.pem -out intermediate/certs/intermediate.cert.pem
+
+# 验证
+openssl x509 -noout -text -in intermediate/certs/intermediate.cert.pem
+openssl verify -CAfile certs/ca.cert.pem intermediate/certs/intermediate.cert.pem
+
+# 要创建CA证书链，将中间证书和根证书连接在一起。 稍后我们将使用这个文件来验证由中间CA签名的证书。
+cat intermediate/certs/intermediate.cert.pem certs/ca.cert.pem > intermediate/certs/ca-chain.cert.pem
+
+
+########################    使用中间证书签署证书；  ###############################
+# 以下步骤是您从证书颁发机构的角度出发的。 但是，第三方可以创建自己的私钥和证书签名请求（CSR），而无需向您透露其私钥。 他们为您提供CSR，并且您将退还已签署的证书。 在那种情况下，跳过genrsa和req命令。
+openssl genrsa -aes256 -out intermediate/private/www.example.com.key.pem 2048
+
+# 使用私钥创建证书签名请求（CSR）。 CSR详细信息不需要与中间CA匹配。 对于服务器证书，公共名称必须是完全限定的域名（例如，www.example.com），而对于客户端证书，它可以是任何唯一标识符（例如，电子邮件地址）。 请注意，通用名称不能与根证书或中间证书相同。
+openssl req -config intermediate/openssl.cnf -key intermediate/private/www.example.com.key.pem -new -sha256 -out intermediate/csr/www.example.com.csr.pem
+
+# 要创建证书，请使用中间CA对CSR进行签名。 如果要在服务器上使用证书，请使用server_cert扩展名。 如果证书将用于用户身份验证，请使用usr_cert扩展名。 证书通常有效期为一年，但CA通常会为方便起见提供额外的几天。
+openssl ca -config intermediate/openssl.cnf -extensions server_cert -days 375 -notext -md sha256 -in intermediate/csr/www.example.com.csr.pem -out intermediate/certs/www.example.com.cert.pem
+
+openssl x509 -noout -text -in intermediate/certs/www.example.com.cert.pem
+
+# 使用我们之前创建的CA证书链文件（ca-chain.cert.pem）来验证新证书是否具有有效的信任链。
+openssl verify -CAfile intermediate/certs/ca-chain.cert.pem intermediate/certs/www.example.com.cert.pem
+
+#  将pem格式的证书转换为pfx格式的。
+openssl pkcs12 -export -out intermediate\certs\example.pfx -inkey intermediate\private\www.example.com.key.pem  -in intermediate\certs\www.example.com.cert.pem -certfile intermediate\certs\intermediate.cert.pem
+
+# 将pem格式的证书转换为der格式。
+openssl x509 -outform der -in intermediate\certs\www.example.com.cert.pem  -out intermediate\certs\example.der
+openssl x509 -outform der -in intermediate\certs\www.example.com.cert.pem  -out intermediate\certs\example.cer
+
+intermediate/csr/www.example.com.csr.pem  		对于用户向CA机构申请证书的申请文件。
+intermediate/certs/www.example.com.cert.pem		是CA机构通过用户给定的申请证书的申请文件生成的证书文件。
