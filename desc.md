@@ -1,0 +1,2 @@
+# knowledge描述
+certificate文件夹：使用Openssl生产证书链以及使用自签名CA签名证书
